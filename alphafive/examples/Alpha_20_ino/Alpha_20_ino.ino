@@ -130,6 +130,7 @@ byte UseRTC;
 unsigned long NextClockUpdate, NextAlarmCheck;
 unsigned long milliTemp;
 unsigned int FLWoffset; // Counter variable for FLW (Five Letter Word) display mode
+uint32_t OldSUNY=0xFFFFFFFF;
 
 // Text Display Variables: 
 unsigned long DisplayWordEndTime;
@@ -876,6 +877,18 @@ void DisplayWordSequence (byte sequence)
     else
       wordSequence = 0;
     break;    
+  case 10:  //Display "HAPPY" "NEW" "YEAR"
+    if (wordSequenceStep == 1)
+      DisplayWord ("HAPPY", 1000); 
+    else if (wordSequenceStep == 3)
+      DisplayWord ("NEW  ", 1000);
+    else if (wordSequenceStep == 5)
+      DisplayWord ("YEAR ", 1000);
+    else if (wordSequenceStep < 7)
+      DisplayWord ("     ", 200);
+    else
+      wordSequence = 0;
+    break;
 
 
 
@@ -1756,8 +1769,10 @@ void UpdateDisplay (byte forceUpdate) {
       }
     }
     else 
+    {
       TimeDisplay(DisplayMode, forceUpdate);
-
+      SerialDisplaySUNY ( SecondsUntilNY() );
+    }
   }
 }
 
@@ -1901,7 +1916,7 @@ void TimeDisplay (byte DisplayModeLocal, byte forceUpdateCopy)  {
     }
 
     if ((HourMode24) || (HrNowTens > 0))
-      WordIn[0] =  HrNowTens + a5_integerOffset;   // Blank leading zero unless in 24-hour mode.
+        WordIn[0] =  HrNowTens + a5_integerOffset;   // Blank leading zero unless in 24-hour mode.
 
     WordIn[1] =  HrNowOnes  + a5_integerOffset;
     WordIn[2] =  MinNowTens + a5_integerOffset;
@@ -1912,12 +1927,19 @@ void TimeDisplay (byte DisplayModeLocal, byte forceUpdateCopy)  {
     else
       WordIn[4] =  units;
 
+    // hack for NYE mode -- recalc everything if mode == 3
+    char DPIn[]={"     "};
+    if ( DisplayModeLocal == 3 ) // NYE Mode
+    {
+      PrepDisplayNYE ( SecondsUntilNY(), WordIn, DPIn );
+    }
+    // end NYE hack
     if(forceUpdateCopy)
     { 
       a5clearOSB();  
       a5loadOSB_Ascii(WordIn,a5_brightLevel);    
 
-      if (DisplayModeLocal & 1)
+      if (DisplayModeLocal & 1 && DisplayModeLocal != 3)
       {
         a5loadOSB_Segment (temp, a5_brightLevel);
         if (units == 'P')
@@ -1930,6 +1952,8 @@ void TimeDisplay (byte DisplayModeLocal, byte forceUpdateCopy)  {
       if ((DisplayModeLocal < 20) && (DisplayModeLocal & 2) && (SecNow & 1)){ 
         // no HOUR:MINUTE separators
       }
+      else if ( DisplayModeLocal == 3 )
+        a5loadOSB_DP(DPIn,a5_brightLevel);
       else
         a5loadOSB_DP("01200",a5_brightLevel);    
 
@@ -2268,4 +2292,147 @@ void EESaveSettings (void){
 } 
 
 
+uint32_t SecondsUntilNY ( )
+{
+  static tmElements_t  te;
+  static unsigned long teTimeStamp=0;
+  static time_t tt;
+  
+  // setup midnight on new year's day
+  if ( millis ( ) - teTimeStamp > 3000 || !tt )
+  {
+    te.Year = CalendarYrToTm ( year()+1);
+    te.Month = 1;
+    te.Day = 1;
+    te.Hour = 0;
+    te.Minute = 0;
+    te.Second = 0;
+    
+    tt = makeTime ( te );
+    teTimeStamp = millis ( );
+  }
+  return tt-now();
+}
 
+void SerialDisplaySUNY ( uint32_t suny )
+{
+  byte days, hours, thours, mins, tmins, secs, tsecs;
+  
+  if ( suny == OldSUNY ) return;
+  
+  Serial.print ( suny, DEC );
+  Serial.println ( " seconds until New Year's." );
+  days = suny / SECS_PER_DAY;
+  if ( days > 99 )
+  {
+    // display DAYS"D"
+    Serial.print ( days, DEC );
+    Serial.println ( "D" );
+  }
+  else if ( days > 4 ) // 96 hours
+  {
+    // display DAY:HR"D"
+    hours = (suny - (days * SECS_PER_DAY)) / SECS_PER_HOUR;
+    thours = U8DIVBY10(hours);
+    Serial.print ( days, DEC );
+    Serial.print ( ":" );
+    Serial.print ( thours, DEC );
+    Serial.println ( hours-(10*thours), DEC );
+    Serial.println ( "D" );
+  }
+  else if ( suny >= 3600  )
+  {
+    // display HR:MN"H"
+    hours = suny / SECS_PER_HOUR;
+    mins = (suny - (hours * SECS_PER_HOUR)) / SECS_PER_MIN;
+    tmins = U8DIVBY10(mins);
+    Serial.print ( hours, DEC );
+    Serial.print ( ":" );
+    Serial.print ( tmins, DEC );
+    Serial.print ( mins-(10*tmins), DEC );
+    Serial.println ( "H" );
+  }
+  else
+  {
+    // last hour, display MN:SC"M"
+    mins = suny / SECS_PER_MIN;
+    secs = suny - (mins * SECS_PER_MIN);
+    tsecs = U8DIVBY10(secs);
+    Serial.print ( mins, DEC );
+    Serial.print ( ":" );
+    Serial.print ( tsecs, DEC );
+    Serial.print ( secs-(10*tsecs), DEC );
+    Serial.println ( "M" );
+  }
+  OldSUNY = suny;
+}
+
+void PrepDisplayNYE ( uint32_t suny, char Nums[], char Decs[] )
+{
+  uint8_t tdays, hdays, hours, thours, mins, tmins, secs, tsecs;
+  uint16_t days;
+  
+  days = suny / SECS_PER_DAY;
+  if ( days > 99 )
+  {
+    // display DAYS"D"
+    tdays = U16DIVBY10(days);
+    hdays = U8DIVBY10(tdays);
+    tdays = tdays - 10 * hdays;
+    days = days - (100 * hdays) - (10 * tdays);
+    Nums[0] = ' ';
+    Nums[1] = hdays == 0 ? ' ' : hdays + a5_integerOffset;
+    Nums[2] = hdays == 0 && tdays == 0 ? ' ' : tdays + a5_integerOffset;
+    Nums[3] = days + a5_integerOffset;
+    Nums[4] = 'D';
+    Decs[0] = ' ',Decs[1] = ' ',Decs[2] = ' ',Decs[3] = ' ',Decs[4] = ' ';
+  }
+  else if ( days > 3 ) // more than 96 hours; less than 99 days
+  {
+    // display DY:HR"D"
+    tdays = U16DIVBY10(days);
+    days = days - (10 * tdays);
+    hours = (suny - (days * SECS_PER_DAY)) / SECS_PER_HOUR;
+    thours = U8DIVBY10(hours);
+    hours = hours-(10*thours);
+    Nums[0] = tdays == 0 ? ' ' : tdays + a5_integerOffset;
+    Nums[1] = days + a5_integerOffset;
+    Nums[2] = thours + a5_integerOffset;
+    Nums[3] = hours + a5_integerOffset;
+    Nums[4] = 'D';
+    Decs[0] = ' ',Decs[1] = '1',Decs[2] = '2',Decs[3] = ' ',Decs[4] = ' ';
+  }
+  else if ( suny >= 3600  )
+  {
+    // display HR:MN"H" -- could show up to 95:59
+    hours = suny / SECS_PER_HOUR;
+    mins = (suny - (hours * SECS_PER_HOUR)) / SECS_PER_MIN;
+    thours = U8DIVBY10(hours);
+    hours = hours-(10*thours);
+    tmins = U8DIVBY10(mins);
+    mins = mins-(10*tmins);
+    Nums[0] = thours == 0 ? ' ' : thours + a5_integerOffset;
+    Nums[1] = hours + a5_integerOffset;
+    Nums[2] = tmins + a5_integerOffset;
+    Nums[3] = mins + a5_integerOffset;
+    Nums[4] = 'H';
+    Decs[0] = ' ',Decs[1] = '1',Decs[2] = '2',Decs[3] = ' ',Decs[4] = ' ';
+  }
+  else if ( suny == 0 ) DisplayWordSequence ( 10 );
+  else
+  {
+    // last hour, display MN:SC"M"
+    mins = suny / SECS_PER_MIN;
+    secs = suny - (mins * SECS_PER_MIN);
+    tmins = U8DIVBY10(mins);
+    mins = mins-(10*tmins);
+    tsecs = U8DIVBY10(secs);
+    secs = secs-(10*tsecs);
+    Nums[0] = tmins == 0 ? ' ' : tmins + a5_integerOffset;
+    Nums[1] = mins == 0 && tmins == 0 ? ' ' : mins + a5_integerOffset;
+    Nums[2] = tsecs + a5_integerOffset;
+    Nums[3] = secs + a5_integerOffset;
+    Nums[4] = 'M';
+    Decs[0] = ' ',Decs[1] = '1',Decs[2] = '2',Decs[3] = ' ',Decs[4] = ' ';
+  }
+}
